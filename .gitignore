@@ -1,0 +1,5 @@
+lazy-listener
+recordings/
+transcripts/
+models/
+whisper-server.log
