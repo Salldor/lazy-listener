@@ -16,6 +16,7 @@ func main() {
 	lang := flag.String("lang", "ru", "transcription language: ru, en, de, fr, …")
 	minRMS := flag.Float64("min-rms", 0.005, "minimum RMS energy to send segment to whisper (0=off)")
 	minSpeechFrames := flag.Int("min-speech-ms", 90, "minimum VAD-confirmed speech duration in ms before transcribing")
+	diarize := flag.Bool("diarize", false, "enable speaker diarization via speaker_tracker.py (requires: pip install resemblyzer flask)")
 	flag.Parse()
 
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(string) {})
@@ -46,7 +47,7 @@ func main() {
 	}
 	defer wav.Close()
 
-	tr, err := newTranscriber(*modelPath, *lang, *minRMS, func(text string) {
+	tr, err := newTranscriber(*modelPath, *lang, *minRMS, *diarize, func(text string) {
 		out.Write(text)
 	})
 	if err != nil {
