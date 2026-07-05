@@ -24,19 +24,21 @@ type SpeechSegment struct {
 }
 
 type VADProcessor struct {
-	detector     *webrtcvad.VAD
-	onSpeech     func(SpeechSegment)
-	sessionStart time.Time
-	segStart     time.Time
-	frameAccum   []byte
-	preroll      [prerollFrames][]byte
-	prerollHead  int
-	speechBuf    []byte
-	inSpeech     bool
-	silenceCount int
+	detector           *webrtcvad.VAD
+	onSpeech           func(SpeechSegment)
+	minActiveFrames    int
+	sessionStart       time.Time
+	segStart           time.Time
+	frameAccum         []byte
+	preroll            [prerollFrames][]byte
+	prerollHead        int
+	speechBuf          []byte
+	inSpeech           bool
+	silenceCount       int
+	activeSpeechFrames int
 }
 
-func newVAD(sessionStart time.Time, onSpeech func(SpeechSegment)) (*VADProcessor, error) {
+func newVAD(sessionStart time.Time, minActiveFrames int, onSpeech func(SpeechSegment)) (*VADProcessor, error) {
 	v, err := webrtcvad.New()
 	if err != nil {
 		return nil, err
@@ -45,9 +47,10 @@ func newVAD(sessionStart time.Time, onSpeech func(SpeechSegment)) (*VADProcessor
 		return nil, err
 	}
 	return &VADProcessor{
-		detector:     v,
-		onSpeech:     onSpeech,
-		sessionStart: sessionStart,
+		detector:        v,
+		onSpeech:        onSpeech,
+		minActiveFrames: minActiveFrames,
+		sessionStart:    sessionStart,
 	}, nil
 }
 
@@ -85,6 +88,7 @@ func (p *VADProcessor) processFrame(frame []byte) {
 			}
 		}
 		p.silenceCount = 0
+		p.activeSpeechFrames++
 		p.speechBuf = append(p.speechBuf, frame...)
 
 		if len(p.speechBuf) >= maxSpeechBytes {
@@ -106,14 +110,21 @@ func (p *VADProcessor) flush() {
 	if len(p.speechBuf) == 0 {
 		return
 	}
-	p.onSpeech(SpeechSegment{
+	active := p.activeSpeechFrames
+	seg := SpeechSegment{
 		Samples: s16ToFloat32(p.speechBuf),
 		Start:   p.segStart.Sub(p.sessionStart),
 		End:     time.Now().Sub(p.sessionStart),
-	})
+	}
 	p.speechBuf = p.speechBuf[:0]
 	p.inSpeech = false
 	p.silenceCount = 0
+	p.activeSpeechFrames = 0
+
+	if active < p.minActiveFrames {
+		return // too little real speech — likely noise, skip
+	}
+	p.onSpeech(seg)
 }
 
 func s16ToFloat32(data []byte) []float32 {

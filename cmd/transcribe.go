@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -14,6 +15,14 @@ import (
 	"strings"
 	"time"
 )
+
+func rms(samples []float32) float64 {
+	var sum float64
+	for _, s := range samples {
+		sum += float64(s) * float64(s)
+	}
+	return math.Sqrt(sum / float64(len(samples)))
+}
 
 func formatTS(d time.Duration) string {
 	total := int(d.Seconds())
@@ -30,11 +39,12 @@ type Transcriber struct {
 	server *exec.Cmd
 	client *http.Client
 	onText func(string)
+	minRMS float64
 	queue  chan SpeechSegment
 	done   chan struct{}
 }
 
-func newTranscriber(modelPath, lang string, onText func(string)) (*Transcriber, error) {
+func newTranscriber(modelPath, lang string, minRMS float64, onText func(string)) (*Transcriber, error) {
 	logFile, err := os.Create("whisper-server.log")
 	if err != nil {
 		return nil, fmt.Errorf("create log: %w", err)
@@ -67,6 +77,7 @@ func newTranscriber(modelPath, lang string, onText func(string)) (*Transcriber, 
 		server: cmd,
 		client: &http.Client{Timeout: 120 * time.Second},
 		onText: onText,
+		minRMS: minRMS,
 		queue:  make(chan SpeechSegment, 4),
 		done:   make(chan struct{}),
 	}
@@ -98,6 +109,9 @@ func (t *Transcriber) Feed(seg SpeechSegment) {
 func (t *Transcriber) run() {
 	defer close(t.done)
 	for seg := range t.queue {
+		if rms(seg.Samples) < t.minRMS {
+			continue // too quiet — noise, skip before hitting whisper
+		}
 		text, err := t.transcribe(seg.Samples)
 		if err == nil && text != "" {
 			ts := fmt.Sprintf("[%s → %s]", formatTS(seg.Start), formatTS(seg.End))

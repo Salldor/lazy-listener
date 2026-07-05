@@ -14,6 +14,8 @@ import (
 func main() {
 	modelPath := flag.String("model", "./models/ggml-small.bin", "path to whisper.cpp ggml model file")
 	lang := flag.String("lang", "ru", "transcription language: ru, en, de, fr, …")
+	minRMS := flag.Float64("min-rms", 0.005, "minimum RMS energy to send segment to whisper (0=off)")
+	minSpeechFrames := flag.Int("min-speech-ms", 90, "minimum VAD-confirmed speech duration in ms before transcribing")
 	flag.Parse()
 
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(string) {})
@@ -44,7 +46,7 @@ func main() {
 	}
 	defer wav.Close()
 
-	tr, err := newTranscriber(*modelPath, *lang, func(text string) {
+	tr, err := newTranscriber(*modelPath, *lang, *minRMS, func(text string) {
 		out.Write(text)
 	})
 	if err != nil {
@@ -53,7 +55,11 @@ func main() {
 	defer tr.Close()
 
 	sessionStart := time.Now()
-	vad, err := newVAD(sessionStart, tr.Feed)
+	minFrames := *minSpeechFrames / 30 // convert ms → frame count (1 frame = 30 ms)
+	if minFrames < 1 {
+		minFrames = 1
+	}
+	vad, err := newVAD(sessionStart, minFrames, tr.Feed)
 	if err != nil {
 		fatal("vad", err)
 	}
