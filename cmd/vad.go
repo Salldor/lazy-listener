@@ -8,12 +8,10 @@ import (
 )
 
 const (
-	captureRate      = 16000
-	frameSamples     = 480                  // 30 ms @ 16 kHz
-	frameBytes       = frameSamples * 2     // S16LE: 2 bytes/sample
-	prerollFrames    = 10                   // 300 ms look-back before speech onset
-	maxSilenceFrames = 23                   // ~700 ms of silence ends a segment
-	maxSpeechBytes   = captureRate * 2 * 30 // 30 s hard cap
+	captureRate   = 16000
+	frameSamples  = 480              // 30 ms @ 16 kHz
+	frameBytes    = frameSamples * 2 // S16LE: 2 bytes/sample
+	prerollFrames = 10               // 300 ms look-back before speech onset
 )
 
 // SpeechSegment carries a transcribable audio chunk with its wall-clock timing.
@@ -27,6 +25,8 @@ type VADProcessor struct {
 	detector           *webrtcvad.VAD
 	onSpeech           func(SpeechSegment)
 	minActiveFrames    int
+	maxSilenceFrames   int
+	maxSegmentBytes    int
 	sessionStart       time.Time
 	segStart           time.Time
 	frameAccum         []byte
@@ -38,7 +38,7 @@ type VADProcessor struct {
 	activeSpeechFrames int
 }
 
-func newVAD(sessionStart time.Time, minActiveFrames int, onSpeech func(SpeechSegment)) (*VADProcessor, error) {
+func newVAD(sessionStart time.Time, minActiveFrames, maxSilenceFrames, maxSegmentBytes int, onSpeech func(SpeechSegment)) (*VADProcessor, error) {
 	v, err := webrtcvad.New()
 	if err != nil {
 		return nil, err
@@ -47,10 +47,12 @@ func newVAD(sessionStart time.Time, minActiveFrames int, onSpeech func(SpeechSeg
 		return nil, err
 	}
 	return &VADProcessor{
-		detector:        v,
-		onSpeech:        onSpeech,
-		minActiveFrames: minActiveFrames,
-		sessionStart:    sessionStart,
+		detector:         v,
+		onSpeech:         onSpeech,
+		minActiveFrames:  minActiveFrames,
+		maxSilenceFrames: maxSilenceFrames,
+		maxSegmentBytes:  maxSegmentBytes,
+		sessionStart:     sessionStart,
 	}, nil
 }
 
@@ -91,7 +93,7 @@ func (p *VADProcessor) processFrame(frame []byte) {
 		p.activeSpeechFrames++
 		p.speechBuf = append(p.speechBuf, frame...)
 
-		if len(p.speechBuf) >= maxSpeechBytes {
+		if len(p.speechBuf) >= p.maxSegmentBytes {
 			p.flush()
 		}
 		return
@@ -100,7 +102,7 @@ func (p *VADProcessor) processFrame(frame []byte) {
 	if p.inSpeech {
 		p.speechBuf = append(p.speechBuf, frame...)
 		p.silenceCount++
-		if p.silenceCount >= maxSilenceFrames {
+		if p.silenceCount >= p.maxSilenceFrames {
 			p.flush()
 		}
 	}
