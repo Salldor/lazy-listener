@@ -17,7 +17,18 @@ func main() {
 	minRMS := flag.Float64("min-rms", 0.005, "minimum RMS energy to send segment to whisper (0=off)")
 	minSpeechFrames := flag.Int("min-speech-ms", 90, "minimum VAD-confirmed speech duration in ms before transcribing")
 	diarize := flag.Bool("diarize", false, "enable speaker diarization via speaker_tracker.py (requires: pip install resemblyzer flask)")
+	silenceMS := flag.Int("silence-ms", 700, "ms of silence that ends a speech segment (diarize default: 350)")
+	maxSegmentMS := flag.Int("max-segment-ms", 30000, "hard cap on segment duration in ms (diarize default: 6000)")
 	flag.Parse()
+
+	if *diarize {
+		if !isFlagSet("silence-ms") {
+			*silenceMS = 350
+		}
+		if !isFlagSet("max-segment-ms") {
+			*maxSegmentMS = 6000
+		}
+	}
 
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(string) {})
 	if err != nil {
@@ -60,7 +71,12 @@ func main() {
 	if minFrames < 1 {
 		minFrames = 1
 	}
-	vad, err := newVAD(sessionStart, minFrames, tr.Feed)
+	maxSilenceFrames := *silenceMS / 30
+	if maxSilenceFrames < 1 {
+		maxSilenceFrames = 1
+	}
+	maxSegmentBytes := *maxSegmentMS * captureRate * 2 / 1000
+	vad, err := newVAD(sessionStart, minFrames, maxSilenceFrames, maxSegmentBytes, tr.Feed)
 	if err != nil {
 		fatal("vad", err)
 	}
@@ -115,4 +131,14 @@ func main() {
 func fatal(label string, err error) {
 	fmt.Fprintf(os.Stderr, "%s: %v\n", label, err)
 	os.Exit(1)
+}
+
+func isFlagSet(name string) bool {
+	found := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
 }
