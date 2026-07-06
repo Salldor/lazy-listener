@@ -2,4 +2,5 @@ lazy-listener
 recordings/
 transcripts/
 models/
+recaps/
 whisper-server.log

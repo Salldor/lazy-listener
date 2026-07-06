@@ -12,6 +12,11 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "recap" {
+		runRecap(os.Args[2:])
+		return
+	}
+
 	modelPath := flag.String("model", "./models/ggml-small.bin", "path to whisper.cpp ggml model file")
 	lang := flag.String("lang", "ru", "transcription language: ru, en, de, fr, …")
 	minRMS := flag.Float64("min-rms", 0.005, "minimum RMS energy to send segment to whisper (0=off)")
@@ -19,6 +24,9 @@ func main() {
 	diarize := flag.Bool("diarize", false, "enable speaker diarization via speaker_tracker.py (requires: pip install resemblyzer flask)")
 	silenceMS := flag.Int("silence-ms", 700, "ms of silence that ends a speech segment (diarize default: 350)")
 	maxSegmentMS := flag.Int("max-segment-ms", 30000, "hard cap on segment duration in ms (diarize default: 6000)")
+	meetingType := flag.String("meeting-type", "general", "meeting type for recap: general, grooming, planning")
+	recapModel := flag.String("recap-model", "gemma4:latest", "Ollama model for recap generation")
+	ollamaURL := flag.String("ollama", "http://localhost:11434", "Ollama server base URL")
 	flag.Parse()
 
 	if *diarize {
@@ -50,13 +58,11 @@ func main() {
 	if err != nil {
 		fatal("output", err)
 	}
-	defer out.Close()
 
 	wav, err := newWAVWriter()
 	if err != nil {
 		fatal("wav writer", err)
 	}
-	defer wav.Close()
 
 	tr, err := newTranscriber(*modelPath, *lang, *minRMS, *diarize, func(text string) {
 		out.Write(text)
@@ -64,7 +70,6 @@ func main() {
 	if err != nil {
 		fatal("transcriber", err)
 	}
-	defer tr.Close()
 
 	sessionStart := time.Now()
 	minFrames := *minSpeechFrames / 30 // convert ms → frame count (1 frame = 30 ms)
@@ -126,6 +131,13 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	fmt.Println("\nStopping...")
+
+	device.Stop()
+	tr.Close()
+	wav.Close()
+	out.Close()
+
+	recapFromFile(out.Path(), *meetingType, *recapModel, *ollamaURL)
 }
 
 func fatal(label string, err error) {
