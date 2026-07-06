@@ -1,12 +1,10 @@
 # lazy-listener
 
-Records audio from a microphone, detects speech in real time using WebRTC VAD, and transcribes it to text with [whisper.cpp](https://github.com/ggml-org/whisper.cpp). Optionally identifies speakers across segments (diarization) using [Resemblyzer](https://github.com/resemble-ai/Resemblyzer). Works in Russian out of the box. Saves both the raw recording (WAV) and the transcript (TXT).
+Records audio from a microphone, detects speech in real time using WebRTC VAD, and transcribes it to text with [whisper.cpp](https://github.com/ggml-org/whisper.cpp). Optionally identifies speakers across segments (diarization) using [Resemblyzer](https://github.com/resemble-ai/Resemblyzer). After the recording stops, automatically generates a structured meeting recap using a local LLM via [Ollama](https://ollama.com). Works in Russian out of the box. Saves the raw recording (WAV), the transcript (TXT), and the recap (MD).
 
 ## Prerequisites
 
 ### 1. Homebrew
-
-If you don't have Homebrew:
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -18,19 +16,27 @@ If you don't have Homebrew:
 brew install go
 ```
 
-Verify: `go version`
-
 ### 3. whisper-cpp
 
 ```bash
 brew install whisper-cpp
 ```
 
-This installs the `whisper-server` binary that lazy-listener uses for transcription.
+This installs the `whisper-server` binary used for transcription.
 
-### 4. Python dependencies (optional, for speaker diarization)
+### 4. Ollama (for recap generation)
 
-Required only if you plan to use the `-diarize` flag:
+```bash
+brew install ollama
+ollama pull gemma4       # or any other model, e.g. gemma3:12b
+ollama serve             # start the local server
+```
+
+The recap is generated automatically after each recording session. If Ollama is not running, a warning is printed and the transcript is still saved normally.
+
+### 5. Python dependencies (optional, for speaker diarization)
+
+Required only with the `-diarize` flag:
 
 ```bash
 pip install resemblyzer flask soundfile
@@ -45,9 +51,7 @@ git clone https://github.com/Salldor/lazy-listener.git
 cd lazy-listener
 ```
 
-### Download a model
-
-Models are not included in the repo. Download one into the `models/` directory.
+### Download a Whisper model
 
 ```bash
 mkdir -p models
@@ -79,8 +83,6 @@ curl -L -o models/ggml-small.bin \
 make build
 ```
 
-No extra flags or system libraries required beyond what Homebrew installs.
-
 ## Usage
 
 ```bash
@@ -95,15 +97,38 @@ Or with explicit flags:
 
 # with speaker diarization
 ./lazy-listener -model ./models/ggml-medium.bin -diarize
+
+# specify meeting type for the recap
+./lazy-listener -model ./models/ggml-medium.bin -meeting-type grooming
+./lazy-listener -model ./models/ggml-medium.bin -meeting-type planning
 ```
 
-| Flag              | Default                   | Description                                        |
-|-------------------|---------------------------|----------------------------------------------------|
-| `-model`          | `./models/ggml-small.bin` | Path to the ggml model file                        |
-| `-lang`           | `ru`                      | Transcription language (`ru`, `en`, `de`, `fr`, …) |
-| `-diarize`        | `false`                   | Enable speaker diarization (requires Python deps)  |
-| `-min-rms`        | `0.005`                   | Minimum RMS energy; segments below this are skipped|
-| `-min-speech-ms`  | `90`                      | Minimum speech duration in ms before transcribing  |
+### All flags
+
+| Flag              | Default                   | Description                                           |
+|-------------------|---------------------------|-------------------------------------------------------|
+| `-model`          | `./models/ggml-small.bin` | Path to the ggml model file                           |
+| `-lang`           | `ru`                      | Transcription language (`ru`, `en`, `de`, `fr`, …)   |
+| `-diarize`        | `false`                   | Enable speaker diarization (requires Python deps)     |
+| `-min-rms`        | `0.005`                   | Minimum RMS energy; segments below this are skipped   |
+| `-min-speech-ms`  | `90`                      | Minimum speech duration in ms before transcribing     |
+| `-silence-ms`     | `700`                     | Silence duration in ms that ends a speech segment     |
+| `-max-segment-ms` | `30000`                   | Hard cap on segment duration in ms                    |
+| `-meeting-type`   | `general`                 | Meeting type for recap: `general`, `grooming`, `planning` |
+| `-recap-model`    | `gemma4:latest`           | Ollama model used for recap generation                |
+| `-ollama`         | `http://localhost:11434`  | Ollama server base URL                                |
+
+### Meeting types
+
+The recap prompt is tailored to the type of meeting:
+
+| Type       | Focus                                                                              |
+|------------|------------------------------------------------------------------------------------|
+| `general`  | Main topics, key decisions, action items                                           |
+| `grooming` | Tasks discussed, priorities, blockers, assignments, sprint goals                   |
+| `planning` | Sprint goals, committed tasks, ownership, risks, decisions made                    |
+
+The recap is written in the same language as the transcript (Russian → Russian, English → English).
 
 ### What happens at startup
 
@@ -111,46 +136,60 @@ Or with explicit flags:
 Available capture devices:
   [1] BlackHole 2ch
   [2] MacBook Pro Microphone
-  [3] ZoomAudioDevice
-Select capture device [1-3]: 2          ← pick your microphone
+Select capture device [1-2]: 2
 
 Available playback devices:
-  [1] BlackHole 2ch
-  [2] MacBook Pro Speakers
-Select playback device (Enter to skip):  ← Enter to disable monitoring
+  [1] MacBook Pro Speakers
+Select playback device (Enter to skip):
 
-Transcript → transcripts/transcript_2026_07_06_00_35_11.txt
-Recording  → recordings/rec_2026_07_06_00_35_11.wav
+Transcript → transcripts/transcript_2026_07_06_10_30_00.txt
+Recording  → recordings/rec_2026_07_06_10_30_00.wav
 Loading model... ready.
 
 Recording... Press Ctrl+C to stop.
 ```
-
-With `-diarize`:
-
-```
-Loading model... ready.
-Starting speaker tracker... ready.
-
-Recording... Press Ctrl+C to stop.
-[00:03 → 00:07] Speaker 1: Привет, сегодня поговорим о проекте.
-[00:09 → 00:14] Speaker 2: Согласен, с чего начнём?
-```
-
-Speak in Russian. After each pause the transcript appears in the terminal and is appended to the text file.
 
 ### Stopping
 
-Press **Ctrl+C**. The WAV file header is finalized on exit so the recording is always valid.
+Press **Ctrl+C**. The shutdown sequence:
+
+1. Audio capture stops.
+2. Any in-flight transcription segments are drained and written to the transcript.
+3. WAV file header is finalized — the recording is always a valid file.
+4. Recap is generated from the completed transcript and saved to `recaps/`.
+
+```
+Stopping...
+
+Generating grooming recap using gemma4:latest...
+
+--- RECAP ---
+## Tasks Discussed
+...
+
+Saved → recaps/recap_2026_07_06_10_30_00_grooming.md
+```
+
+### Process existing transcripts
+
+You can also generate a recap for any existing transcript file without recording:
+
+```bash
+./lazy-listener recap \
+  -transcript transcripts/transcript_2026_07_06_10_30_00.txt \
+  -type grooming \
+  -model gemma4:latest
+```
 
 ## Output files
 
-| Directory     | Contents                                      |
-|---------------|-----------------------------------------------|
-| `recordings/` | `rec_YYYY_MM_DD_HH_MM_SS.wav` — raw audio     |
-| `transcripts/`| `transcript_YYYY_MM_DD_HH_MM_SS.txt` — text   |
+| Directory     | Contents                                                       |
+|---------------|----------------------------------------------------------------|
+| `recordings/` | `rec_YYYY_MM_DD_HH_MM_SS.wav` — raw audio                     |
+| `transcripts/`| `transcript_YYYY_MM_DD_HH_MM_SS.txt` — timestamped transcript |
+| `recaps/`     | `recap_YYYY_MM_DD_HH_MM_SS_<type>.md` — meeting recap         |
 
-Both directories are created automatically on first run.
+All directories are created automatically on first run.
 
 ## How it works
 
@@ -167,13 +206,20 @@ Microphone
                 │     model kept in memory                    ├──▶ console + transcript file
                 └──▶ speaker-tracker (HTTP :18766) ──▶ label ┘
                       voice gallery kept in memory
+
+  On Ctrl+C:
+  └──▶ transcript file
+         │
+         └──▶ Ollama /api/chat ──▶ recap (Markdown)
+               local LLM (Gemma or other)
 ```
 
 - **WebRTC VAD** classifies each 30 ms audio frame as speech or silence.
 - A segment is sent for transcription after ~700 ms of silence following speech.
 - **300 ms pre-roll** is prepended so the beginning of words is never cut off.
 - `whisper-server` runs as a local subprocess — the model loads once and stays in memory for the entire session.
-- `speaker_tracker.py` (when `-diarize` is set) maintains a gallery of voice embeddings (Resemblyzer GE2E) across the entire session. Each new segment is compared against known voices via cosine similarity; a new speaker ID is assigned when no match exceeds the threshold (0.75 by default). Both HTTP requests run in parallel per segment.
+- `speaker_tracker.py` (when `-diarize` is set) maintains a gallery of voice embeddings (Resemblyzer GE2E) across the session. Each segment is compared against known voices via cosine similarity; a new speaker ID is assigned when no match exceeds the threshold (0.75 by default).
+- After Ctrl+C, the full transcript is sent to a local Ollama model with a type-specific system prompt to produce the structured recap.
 
 ## Microphone permissions
 
@@ -188,19 +234,22 @@ Run `brew install whisper-cpp`.
 Download the model as shown in the Setup section.
 
 **No transcription output despite speaking**  
-- Check that the correct capture device is selected.  
-- Speak closer to the microphone and pause between sentences — VAD needs a clear silence to trigger transcription.  
-- Tail `whisper-server.log` to see what the server is doing:  
+- Check that the correct capture device is selected.
+- Speak closer to the microphone and pause between sentences — VAD needs a clear silence to trigger transcription.
+- Tail `whisper-server.log` to see what the server is doing:
   ```bash
   tail -f whisper-server.log
   ```
 
+**Recap generation failed: ollama request failed (is ollama running?)**  
+Start the Ollama server with `ollama serve`, or pull the model first: `ollama pull gemma4`.
+
 **Speaker diarization shows `Speaker ?`**  
 The speaker tracker returned an error. Check the log:
-  ```bash
-  tail -f speaker-tracker.log
-  ```
+```bash
+tail -f speaker-tracker.log
+```
 Common cause: missing Python dependencies — run `pip install resemblyzer flask soundfile`.
 
 **All speech is attributed to the same speaker**  
-The cosine similarity threshold may be too low for the voices in the session. The default is 0.75; lower values make the tracker more permissive (fewer new speakers assigned). You can change it by editing `speaker_tracker.py` and adjusting the `--threshold` default, or by modifying `startSpeakerTracker()` in `cmd/transcribe.go` to pass a different value.
+The cosine similarity threshold may be too low. The default is 0.75; lower values make the tracker more permissive. Adjust via `--threshold` in `startSpeakerTracker()` in `cmd/transcribe.go`.

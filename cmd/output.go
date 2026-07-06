@@ -10,6 +10,7 @@ import (
 type Output struct {
 	w    io.Writer
 	file *os.File
+	path string
 }
 
 func newOutput() (*Output, error) {
@@ -22,8 +23,10 @@ func newOutput() (*Output, error) {
 		return nil, err
 	}
 	fmt.Printf("Transcript → %s\n", name)
-	return &Output{w: io.MultiWriter(os.Stdout, f), file: f}, nil
+	return &Output{w: io.MultiWriter(os.Stdout, f), file: f, path: name}, nil
 }
+
+func (o *Output) Path() string { return o.path }
 
 func (o *Output) Write(text string) {
 	fmt.Fprintln(o.w, text)
