@@ -166,7 +166,7 @@ func (t *Transcriber) run() {
 
 		if !t.diarize {
 			text, err := t.transcribeWAV(wav)
-			if err == nil && text != "" {
+			if err == nil && text != "" && !isHallucination(text, seg.End-seg.Start) {
 				t.onText(ts + " " + text)
 			}
 			continue
@@ -191,7 +191,7 @@ func (t *Transcriber) run() {
 		tr := <-textCh
 		sr := <-spkCh
 
-		if tr.err == nil && tr.val != "" {
+		if tr.err == nil && tr.val != "" && !isHallucination(tr.val, seg.End-seg.Start) {
 			speaker := "Speaker ?"
 			if sr.err == nil && sr.val != "" {
 				speaker = sr.val
@@ -237,6 +237,47 @@ func (t *Transcriber) identify(wav []byte) (string, error) {
 		return "", err
 	}
 	return result.Speaker, nil
+}
+
+// whisperHallucinations contains substrings whisper produces on silence/noise.
+// These are training-data artifacts (subtitled YouTube content) with no speech content.
+var whisperHallucinations = []string{
+	"продолжение следует",
+	"субтитры сделал",
+	"субтитры добавил",
+	"субтитры создал",
+	"субтитры:",
+	"редактор субтитров",
+	"переведено для",
+	"amara.org",
+	"subscribetoмоему",
+	"подписывайтесь на канал",
+	"thanks for watching",
+	"thank you for watching",
+	"please subscribe",
+	"like and subscribe",
+	"www.",
+	".com",
+}
+
+// isHallucination returns true if text is a known whisper artifact or suspiciously
+// sparse for its segment duration (a single short word over several seconds of audio).
+func isHallucination(text string, dur time.Duration) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+
+	for _, h := range whisperHallucinations {
+		if strings.Contains(lower, h) {
+			return true
+		}
+	}
+
+	// Single very short word in a segment longer than 2 seconds is almost always noise.
+	words := strings.Fields(lower)
+	if dur >= 2*time.Second && len(words) == 1 && len([]rune(words[0])) <= 6 {
+		return true
+	}
+
+	return false
 }
 
 func wavMultipart(wav []byte, filename string) (*bytes.Buffer, string, error) {
